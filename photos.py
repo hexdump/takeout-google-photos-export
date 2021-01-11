@@ -16,7 +16,7 @@ from PIL import Image as PILImage
 from PIL import UnidentifiedImageError
 # so we can dispatch to exiftool for
 # TIFF manipulation
-from subprocess import check_call, PIPE, CalledProcessError
+from subprocess import check_call, PIPE, CalledProcessError, DEVNULL
 # so we can manipulate created/modified times
 # for importing
 from os import utime
@@ -31,6 +31,14 @@ from pyheif import read as read_heic
 from sys import exit
 # for a progress bar
 from tqdm import tqdm
+# to copy files
+from shutil import copyfile
+
+LOG = ""
+
+def log(message):
+    global LOG
+    LOG += message + "\n"
 
 class Timestamp:
     def __init__(self, taken, created, modified):
@@ -98,7 +106,7 @@ class Media:
         if self.is_metadata_complete():
             # add our metadata
             try:
-                command = ["exiftool", path, "-overwrite_original"
+                command = ["exiftool", path, "-overwrite_original",
                            f"-DateTimeOriginal={self.timestamp.taken}",
                            f"-CreateDate={self.timestamp.created}",
                            f"-ModifyDate={self.timestamp.modified}"]
@@ -106,39 +114,40 @@ class Media:
                     command += [f"-GPSLatitude {self.location.latitude}",
                                 f"-GPSLongitude {self.location.longitude}",
                                 f"-GPSAltitude {self.location.altitude}"]
-                    check_call(command, stdout=PIPE, stderr=PIPE)
+                    check_call(command, stdout=DEVNULL, stderr=DEVNULL)
                     utime(path, (self.timestamp.created.timestamp(),
                                  self.timestamp.modified.timestamp()))
-            except CalledProcessError:
-                tqdm.print(f"error! could not set metadata on {path}!")
+            except CalledProcessError as e:
+                print(e)
+                log(f"error! could not set metadata on {path}!")
                 exit(1)
         else:
             raise ValueError("metadata incomplete.")
         
     def save(self, target_directory):
-        with open(self.path, "rb") as source:
-            target_path = target_directory.joinpath(self.target_filename)
-            if target_path.exists():
-                tqdm.print(f"warning: duplicate version of {self.path} detected! ignoring...")
-            else:
-                with open(target_path, "wb") as dest:
-                    dest.write(source.read())
+        target_path = target_directory.joinpath(self.target_filename)
+        if target_path.exists():
+            log(f"warning: duplicate version of {self.path} detected! ignoring...")
+        else:
+            copy(self.path, target_path)
 
 class Video(Media):
     def save(self, target_directory):
         if self.is_metadata_complete():
-            target_path = target_directory.joinpath(self.target_filename)
+            target_path = target_directory.joinpath(self.target_filename).with_suffix(".mov")
             if self.path.suffix.lower() == ".mp4":
                 # do a container transfer with no actual conversion.
                 try:
-                    check_call(["ffmpeg", "-i", self.path,
-                                "-f", "mov", target_path])
+                    check_call(["ffmpeg", "-i", self.path, "-c", "copy",
+                                "-f", "mov", target_path, "-y"],
+                               stdout=DEVNULL, stderr=DEVNULL)
                     # later, we're gonna copy the file at self.path to
                     # self.target_path, so this assignment nullifies that
                     # operation (since we don't want the original, non-MOV).
-                    self.path = self.target_path
-                except CalledProcessError:
-                    tqdm.print(f"error! could not transfer container for {self.path}!")
+                    self.path = target_path
+                except CalledProcessError as e:
+                    print(e)
+                    print(f"error! could not transfer container for {self.path}!")
                     exit(1)
 
             # we shouldn't be allowing this to be initialized
@@ -146,9 +155,11 @@ class Video(Media):
             assert self.path.suffix.lower() == ".mov"
 
             # copy the file over to the new location
-            with open(target_path, "wb") as destination:
-                with open(self.path, "rb") as source:
-                    destination.write(source.read())
+            if self.path != target_path:
+                shutil.copy(self.path, target_path)
+#            with open(target_path, "wb") as destination:
+#                with open(self.path, "rb") as source:
+#                    destination.write(source.read())
 
             # set the metadata.
             self.apply_exif(target_path)
@@ -169,65 +180,63 @@ class Image(Media):
             source = PILImage.open(self.path, "r")
 
         target_path = target_directory.joinpath(self.shasum + '.tiff')
-
+        
         if target_path.exists():
-            tqdm.print(f"warning: duplicate version of {self.path} detected! ignoring...")
+            log(f"warning: duplicate version of {self.path} detected! ignoring...")
         else:
             if self.is_metadata_complete():
-                source.save(target_path, format='TIFF')
+                source.save(target_path, format='TIFF', quality=100)
                 self.apply_exif(target_path)
                     
 @click.command()
 @click.option("-t", "--takeout-directory", type=Path, required=True, help="Google Takeout directory.")
 @click.option("-o", "--output-directory", type=Path, required=True, help="Directory in which to put imported files.")
 def main(takeout_directory, output_directory):
-    files = takeout_directory.rglob("**/*")
-
-    metadata = {}
-    media = {}
+    metadata = []
+    media = []
     
-    for path in files:
-        if path.is_file():
-            # directory name for organizing metadata
-            # and images collections.
-            dirname = path.parent
+    for filename in takeout_directory.rglob("*"):
+        # blindly suck in all JSON files.
+        if filename.name.endswith('.json'):
+#            try:
+            metadata.append(Metadatum(filename))
+            continue
+#            except ValueError:
+#                pass
 
-            # make sure we have space to put metadata or images
-            metadata[dirname] = metadata.get(dirname, [])
-            media[dirname] = media.get(dirname, [])
-            
-            # blindly suck in all JSON files.
-            if path.name.endswith('.json'):
-                try:
-                    metadata[dirname].append(Metadatum(path))
-                    continue
-                except ValueError:
-                    pass
+        if filename.suffix.lower() == ".heic":
+            media.append(Image(filename))
 
-            # let's see if we can load it as an image file.
-            # if we can, load it into the images list.
-            try:
-                if path.suffix.lower() != ".heic":
-                    PILImage.open(path)
-                media[dirname].append(Image(path))
+        # let's see if we can load it as an image file.
+        # if we can, load it into the images list.
+        try:
+            if filename.suffix.lower() != ".heic":
+                PILImage.open(filename)
+                media.append(Image(filename))
                 continue
-            except UnidentifiedImageError:
-                pass
+        except UnidentifiedImageError:
+            pass
 
-            # i don't have support for all video file formats, so we
-            # just check if the file is in the supported list.
-            if path.suffix.lower() in ['.mp4', '.mov']:
-                media[dirname].append(Video(path))
+        # i don't have support for all video file formats, so we
+        # just check if the file is in the supported list.
+        if filename.suffix.lower() in ['.mp4', '.mov']:
+            media.append(Video(filename))
                 
     # unify metadata and images
-    for dirname in tqdm(media):
-        for item in media[dirname]:
-            for metadatum in metadata[dirname]:
+    with tqdm(media) as iterator:
+        for item in iterator:
+            matched  = False
+            for metadatum in metadata:
                 if item.title == metadatum.title:
                     item.timestamp = metadatum.timestamp
                     item.location = metadatum.location
                     item.save(output_directory)
-
+                    matched = True
+            if not matched:
+                log(item.title + " not saved.")
+            
+    # print our accumulated log
+    print(LOG)
 
 if __name__ == "__main__":
     main()
