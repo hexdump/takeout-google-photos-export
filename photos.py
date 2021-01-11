@@ -32,7 +32,7 @@ from sys import exit
 # for a progress bar
 from tqdm import tqdm
 # to copy files
-from shutil import copyfile
+from shutil import copy
 
 LOG = ""
 
@@ -156,7 +156,7 @@ class Video(Media):
 
             # copy the file over to the new location
             if self.path != target_path:
-                shutil.copy(self.path, target_path)
+                copy(self.path, target_path)
 #            with open(target_path, "wb") as destination:
 #                with open(self.path, "rb") as source:
 #                    destination.write(source.read())
