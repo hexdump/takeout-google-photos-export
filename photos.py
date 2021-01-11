@@ -198,11 +198,11 @@ def main(takeout_directory, output_directory):
     for filename in takeout_directory.rglob("*"):
         # blindly suck in all JSON files.
         if filename.name.endswith('.json'):
-#            try:
-            metadata.append(Metadatum(filename))
-            continue
-#            except ValueError:
-#                pass
+            try:
+                metadata.append(Metadatum(filename))
+                continue
+            except ValueError:
+                pass
 
         if filename.suffix.lower() == ".heic":
             media.append(Image(filename))
