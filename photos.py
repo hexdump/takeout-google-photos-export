@@ -166,6 +166,7 @@ class Video(Media):
                     
 class Image(Media):
     def save(self, target_directory):
+        print(self.path)
         if self.path.suffix.lower() == ".heic":
             heic = read_heic(self.path)
             source = PILImage.frombytes(
