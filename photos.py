@@ -114,9 +114,9 @@ class Media:
                     command += [f"-GPSLatitude {self.location.latitude}",
                                 f"-GPSLongitude {self.location.longitude}",
                                 f"-GPSAltitude {self.location.altitude}"]
-                    check_call(command, stdout=DEVNULL, stderr=DEVNULL)
-                    utime(path, (self.timestamp.created.timestamp(),
-                                 self.timestamp.modified.timestamp()))
+                check_call(command, stdout=DEVNULL, stderr=DEVNULL)
+                utime(path, (self.timestamp.created.timestamp(),
+                             self.timestamp.modified.timestamp()))
             except CalledProcessError as e:
                 print(e)
                 log(f"error! could not set metadata on {path}!")
