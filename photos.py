@@ -234,6 +234,7 @@ def main(takeout_directory, output_directory):
                     item.save(output_directory)
                     matched = True
             if not matched:
+                copy(item.title, "spare")
                 log(item.title + " not saved.")
             
     # print our accumulated log
